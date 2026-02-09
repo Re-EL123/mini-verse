@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>3D Universe Explorer – Mini Galaxy</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #eee;
+    }
+    canvas { display: block; }
+    #ui {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      pointer-events: none;
+      text-shadow: 0 0 8px #000;
+      user-select: none;
+      font-size: 1.1em;
+    }
+    #info {
+      position: absolute;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.8);
+      color: #fff;
+      padding: 20px 30px;
+      border-radius: 12px;
+      max-width: 480px;
+      display: none;
+      pointer-events: auto;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.7);
+      z-index: 10;
+    }
+    #info h2 {
+      margin: 0 0 14px;
+      color: #4af;
+    }
+    #info p {
+      margin: 8px 0;
+      font-size: 0.98em;
+    }
+    #controls-hint {
+      position: absolute;
+      bottom: 16px;
+      right: 16px;
+      color: #ccc;
+      font-size: 0.9em;
+      pointer-events: none;
+      text-align: right;
+      user-select: none;
+    }
+    button {
+      margin-top: 12px;
+      padding: 8px 18px;
+      background: #555;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button:hover { background: #777; }
+  </style>
+</head>
+<body>
+
+<div id="ui">
+  Speed: <span id="speed">1.0</span>× (scroll to change)
+</div>
+
+<div id="info">
+  <h2 id="objName">Object</h2>
+  <p id="objType">Type: —</p>
+  <p id="objDist">Distance: —</p>
+  <p id="objFact">—</p>
+  <button onclick="document.getElementById('info').style.display='none'">Close</button>
+</div>
+
+<div id="controls-hint">
+  Click to lock mouse pointer<br>
+  WASD / Arrows — move<br>
+  Mouse — look around<br>
+  Space / Q — up<br>
+  Shift / E — down<br>
+  Scroll — speed
+</div>
+
+<!-- Working legacy controls (r134 is one of the last versions with /js/controls/) -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.134.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/controls/PointerLockControls.min.js"></script>
+
+<script>
+// Fail-safe: show message if scripts didn't load
+if (typeof THREE === 'undefined' || typeof THREE.PointerLockControls === 'undefined') {
+  document.body.innerHTML += `
+    <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#400; color:#f88; padding:30px 50px; border-radius:12px; font-size:1.3em; z-index:999; text-align:center;">
+      Three.js or PointerLockControls failed to load.<br>
+      Open DevTools (F12) → Network tab and check for 404 errors.
+    </div>`;
+}
+
+// ──────────────────────────────────────────────── Setup ─────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000814);
+scene.fog = new THREE.FogExp2(0x000814, 0.000032);
+
+const camera = new THREE.PerspectiveCamera(66, window.innerWidth / window.innerHeight, 0.1, 60000);
+camera.position.set(0, 250, 1200);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+// Controls (legacy constructor works here)
+const controls = new THREE.PointerLockControls(camera, document.body);
+document.addEventListener('click', () => {
+  if (!controls.isLocked) controls.lock();
+});
+
+// Movement state
+const move = { forward: false, backward: false, left: false, right: false, up: false, down: false };
+let moveSpeed = 180;
+
+// ──────────────────────────────────────────────── Stars ─────
+const starsCount = 16000;
+const starsGeometry = new THREE.BufferGeometry();
+const positions = new Float32Array(starsCount * 3);
+const colors = new Float32Array(starsCount * 3);
+
+for (let i = 0; i < starsCount * 3; i += 3) {
+  const radius = 16000 * Math.cbrt(Math.random());
+  const theta = Math.random() * Math.PI * 2;
+  const phi = Math.acos(2 * Math.random() - 1);
+  positions[i]     = radius * Math.sin(phi) * Math.cos(theta);
+  positions[i + 1] = radius * Math.sin(phi) * Math.sin(theta);
+  positions[i + 2] = radius * Math.cos(phi);
+
+  const brightness = 0.75 + Math.random() * 0.25;
+  const hue = 0.55 + Math.random() * 0.18;
+  const color = new THREE.Color().setHSL(hue, 0.45, brightness);
+  colors[i] = color.r; colors[i+1] = color.g; colors[i+2] = color.b;
+}
+
+starsGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+starsGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+scene.add(new THREE.Points(starsGeometry, new THREE.PointsMaterial({
+  size: 1.7,
+  vertexColors: true,
+  sizeAttenuation: true,
+  transparent: true,
+  opacity: 0.93,
+  blending: THREE.AdditiveBlending
+})));
+
+// ──────────────────────────────────────────────── Nebulae ─────
+function createNebula(x, y, z, scale, color) {
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(scale * 2, scale * 2),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.08,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    })
+  );
+  mesh.position.set(x, y, z);
+  mesh.rotation.set(
+    (Math.random() - 0.5) * 0.7,
+    Math.random() * Math.PI * 2,
+    (Math.random() - 0.5) * 0.6
+  );
+  scene.add(mesh);
+}
+
+createNebula( 700, -600, -2000, 2000, 0x4455ff);
+createNebula(-1200, 900, -2600, 2400, 0xff66cc);
+createNebula( 600, 1000, -1200, 1600, 0x66ffbb);
+createNebula(-1600, -700, 1400, 2200, 0xffaa00);
+
+// ──────────────────────────────────────────────── Planets ─────
+const planets = [];
+
+function createPlanet(name, pos, radius, color, fact, type) {
+  const group = new THREE.Group();
+  group.position.copy(pos);
+
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(radius, 64, 48),
+    new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.85,
+      metalness: 0.12,
+      emissive: color,
+      emissiveIntensity: 0.07
+    })
+  );
+  group.add(mesh);
+
+  const glow = new THREE.Mesh(
+    new THREE.SphereGeometry(radius * 1.16, 40, 20),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.24,
+      blending: THREE.AdditiveBlending,
+      side: THREE.BackSide
+    })
+  );
+  group.add(glow);
+
+  scene.add(group);
+  planets.push({ mesh, name, type, fact, radius, pos: pos.clone() });
+}
+
+createPlanet("Aetherion", new THREE.Vector3(-700, 250, -2800), 95, 0x88aaff, "Hazy ice giant with crystalline methane clouds and 47 moons.", "Ice Giant");
+createPlanet("Vulkaris",  new THREE.Vector3(1500, -450, -2200), 140, 0xff7733, "Volcanic super-Earth. Lava oceans cover much of the surface (~430 °C).", "Rocky");
+createPlanet("Zephyria",  new THREE.Vector3(-500, 1100, -3400), 80, 0x44ffdd, "Supercritical fluid world — potential exotic life in deep high-pressure layers.", "Exotic");
+
+// ──────────────────────────────────────────────── Lighting ─────
+scene.add(new THREE.PointLight(0xffeecc, 2.8, 16000).position.set(6000, 4000, -8000));
+scene.add(new THREE.AmbientLight(0x202060, 0.55));
+
+// ──────────────────────────────────────────────── Click to show info ─────
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+window.addEventListener('pointerdown', e => {
+  if (!controls.isLocked) return;
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+
+  const intersects = raycaster.intersectObjects(planets.map(p => p.mesh));
+  if (intersects.length > 0) {
+    const hitPlanet = planets.find(p => p.mesh === intersects[0].object);
+    if (hitPlanet) {
+      const distance = camera.position.distanceTo(hitPlanet.pos).toFixed(0);
+      document.getElementById('objName').textContent = hitPlanet.name;
+      document.getElementById('objType').textContent = `Type: ${hitPlanet.type}`;
+      document.getElementById('objDist').textContent = `Distance: ${distance} units`;
+      document.getElementById('objFact').textContent = hitPlanet.fact;
+      document.getElementById('info').style.display = 'block';
+    }
+  }
+});
+
+// ──────────────────────────────────────────────── Audio ─────
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+// Low hum
+const humOsc = audioCtx.createOscillator();
+humOsc.type = 'sine';
+humOsc.frequency.value = 36;
+const humGain = audioCtx.createGain();
+humGain.gain.value = 0.07;
+humOsc.connect(humGain);
+humGain.connect(audioCtx.destination);
+humOsc.start();
+
+// Movement whoosh
+const whooshOsc = audioCtx.createOscillator();
+whooshOsc.type = 'sawtooth';
+whooshOsc.frequency.value = 100;
+const whooshGain = audioCtx.createGain();
+whooshGain.gain.value = 0;
+whooshOsc.connect(whooshGain);
+whooshGain.connect(audioCtx.destination);
+whooshOsc.start();
+
+// ──────────────────────────────────────────────── Input handling ─────
+document.addEventListener('keydown', e => {
+  switch (e.code) {
+    case 'KeyW': case 'ArrowUp':    move.forward  = true; break;
+    case 'KeyS': case 'ArrowDown':  move.backward = true; break;
+    case 'KeyA': case 'ArrowLeft':  move.left     = true; break;
+    case 'KeyD': case 'ArrowRight': move.right    = true; break;
+    case 'KeyQ': case 'Space':      move.up       = true; break;
+    case 'KeyE': case 'ShiftLeft':  move.down     = true; break;
+  }
+});
+
+document.addEventListener('keyup', e => {
+  switch (e.code) {
+    case 'KeyW': case 'ArrowUp':    move.forward  = false; break;
+    case 'KeyS': case 'ArrowDown':  move.backward = false; break;
+    case 'KeyA': case 'ArrowLeft':  move.left     = false; break;
+    case 'KeyD': case 'ArrowRight': move.right    = false; break;
+    case 'KeyQ': case 'Space':      move.up       = false; break;
+    case 'KeyE': case 'ShiftLeft':  move.down     = false; break;
+  }
+});
+
+window.addEventListener('wheel', e => {
+  moveSpeed = Math.max(60, Math.min(2000, moveSpeed - e.deltaY * 0.25));
+  document.getElementById('speed').textContent = (moveSpeed / 180).toFixed(1);
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ──────────────────────────────────────────────── Animation loop ─────
+const clock = new THREE.Clock();
+const velocity = new THREE.Vector3();
+const direction = new THREE.Vector3();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+
+  if (controls.isLocked) {
+    direction.z = Number(move.forward) - Number(move.backward);
+    direction.x = Number(move.right)   - Number(move.left);
+    direction.y = Number(move.up)      - Number(move.down);
+
+    if (direction.lengthSq() > 0) direction.normalize();
+
+    velocity.x = direction.x * moveSpeed * delta * 1.7;
+    velocity.z = direction.z * moveSpeed * delta * 1.7;
+    velocity.y = direction.y * moveSpeed * delta * 1.4;
+
+    controls.moveRight(velocity.x);
+    controls.moveForward(velocity.z);
+    camera.position.y += velocity.y;
+
+    // Whoosh sound based on speed
+    const currentSpeed = velocity.length();
+    whooshGain.gain.setTargetAtTime(currentSpeed > 300 ? 0.16 : 0, audioCtx.currentTime, 0.1);
+    whooshOsc.frequency.setTargetAtTime(70 + currentSpeed * 0.45, audioCtx.currentTime, 0.13);
+  }
+
+  // Gentle planet rotation
+  planets.forEach(p => {
+    p.mesh.rotation.y += 0.0008 * (p.radius / 100);
+  });
+
+  renderer.render(scene, camera);
+}
+
+animate();
+</script>
+</body>
+</html>
